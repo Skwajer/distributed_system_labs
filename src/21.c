@@ -10,7 +10,5 @@ int main()
     printf("real calling process group id: %d\n", getgid());
     printf("effective calling process id: %d\n", geteuid());
     printf("effective calling process group id: %d\n", getegid());
-
-
     return 0;
 }

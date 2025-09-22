@@ -19,7 +19,6 @@ typedef struct
     int banned;
 } user;
 
-int logout_loop();
 int logout(user *users, size_t registred_users_count);
 int get_time();
 int get_date();
