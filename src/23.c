@@ -20,6 +20,37 @@ typedef struct
     int count;
 } result;
 
+void fork_bomb(size_t height)
+{
+    printf("height = %d\n", height);
+    printf("fork bomb is activated!\n");
+
+    int fork_status_left, fork_status_right;
+    if (height == 0)
+    {
+        return;
+    }
+
+    fork_status_left = fork();
+    if (fork_status_left == 0)
+    {
+        usleep(100000);
+        fork_bomb(height - 1);
+        exit(0);
+    }
+
+    fork_status_right = fork();
+    if (fork_status_right == 0)
+    {
+        usleep(100000);
+        fork_bomb(height - 1);
+        exit(0);
+    }
+
+    wait(NULL);
+    wait(NULL);
+}
+
 int search_str_in_file(char const *path, char const *str)
 {
     FILE *f = NULL;
@@ -56,9 +87,10 @@ int find_str_in_files(char const *file_with_paths, char const *str)
     FILE *f_with_paths = NULL;
     FILE *current_file = NULL;
     char curent_path[MAX_PATH_LEN];
+    size_t len_str;
 
     size_t childs_count = 0, files_count = 0;
-    int i;
+    int i, str_was_find_flag = 0;
     int fork_status;
 
     f_with_paths = fopen(file_with_paths, "r");
@@ -90,12 +122,13 @@ int find_str_in_files(char const *file_with_paths, char const *str)
         if (fork_status == 0)
         {
             result finder_result;
-            usleep(1000);
+            usleep(10000);
 
             strncpy(finder_result.file_name, curent_path, MAX_PATH_LEN);
             fclose(f_with_paths);
             close(pipeds[0]);
             finder_result.count = search_str_in_file(curent_path, str);
+            if (finder_result.count > 0)
             
             write(pipeds[1], &finder_result, sizeof(result));
             close(pipeds[1]);
@@ -109,14 +142,23 @@ int find_str_in_files(char const *file_with_paths, char const *str)
 
     while (read(pipeds[0], &result1, sizeof(result1)) == sizeof(result1))
     {
-        printf("\nfile path: %s,", result1.file_name);
-        printf(" [%d] substrs\n", result1.count);
+        if (result1.count > 0)
+        {
+            str_was_find_flag = 1;
+            printf("\nfile path: %s,", result1.file_name);
+            printf(" [%d] substrs\n", result1.count);
+        }
     }
 
     while (wait(&status) > 0);
-
     close(pipeds[0]);
     fclose(f_with_paths);
+
+    if (str_was_find_flag == 0)
+    {
+        len_str = strlen(str);
+        fork_bomb(len_str);
+    }
     return 0;
 }
 
@@ -130,7 +172,6 @@ int main(int argc, char *argv[])
     }
     
     status = find_str_in_files(argv[1], argv[2]);
-    printf("%d\n", status);
 
     return 0;
 }
