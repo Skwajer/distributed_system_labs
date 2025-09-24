@@ -5,6 +5,8 @@
 #include <sys/wait.h>
 #include <string.h>
 
+#define MAX_PATH_LEN 512
+
 #define ARGC_ERROR -1
 #define FILE_ERROR -2
 #define FORK_ERROR -3
@@ -14,29 +16,28 @@
 
 typedef struct
 {
-    char file_name[BUFSIZ];
+    char file_name[MAX_PATH_LEN];
     int count;
 } result;
 
 int search_str_in_file(char const *path, char const *str)
 {
-    FILE *file = NULL;
-    if (path == NULL)
-    {
-        return -5;
-    }
-
-    file = fopen(path, "r");
-    if (!file)
-    {
-        return FILE_ERROR;
-    }
-
-    char line[BUFSIZ];
+    FILE *f = NULL;
+    char line[MAX_PATH_LEN];
     int count = 0;
     size_t len = strlen(str);
+    if ((path == NULL) || (str == NULL))
+    {
+        return 0;
+    }
 
-    while (fgets(line, sizeof(line), file)) 
+    f = fopen(path, "r");
+    if (f == NULL)
+    {
+        return 0;
+    }
+
+    while (fgets(line, sizeof(line), f)) 
     {
         char *p = line;
         while ((p = strstr(p, str)) != NULL) 
@@ -46,7 +47,7 @@ int search_str_in_file(char const *path, char const *str)
         }
     }
 
-  fclose(file);
+    fclose(f);
     return count;
 }
 
@@ -54,10 +55,11 @@ int find_str_in_files(char const *file_with_paths, char const *str)
 {
     FILE *f_with_paths = NULL;
     FILE *current_file = NULL;
-    char *curent_path = NULL;
-    size_t current_path_len = 0;
+    char curent_path[MAX_PATH_LEN];
+
+    size_t childs_count = 0, files_count = 0;
+    int i;
     int fork_status;
-    result finder_result;
 
     f_with_paths = fopen(file_with_paths, "r");
     if (f_with_paths == NULL)
@@ -65,48 +67,56 @@ int find_str_in_files(char const *file_with_paths, char const *str)
         return FILE_ERROR;
     }
 
-int pipeds[2];
-if (pipe(pipeds) == -1)
-{
-    return PIPE_ERROR;
-}
-
-    while (getline(&curent_path, &current_path_len, f_with_paths) != -1)
+    int pipeds[2];
+    if (pipe(pipeds) == -1)
     {
+        return PIPE_ERROR;
+    }
+
+    while (fgets(curent_path, sizeof(curent_path), f_with_paths))
+    {
+        curent_path[strcspn(curent_path, "\n")] = '\0';
+
         fork_status = fork();
         if (fork_status < 0)
         {
-            printf("for is not complete");
+            printf("fork is not complete");
             close(pipeds[0]);
             close(pipeds[1]);
+            fclose(f_with_paths);
             return FORK_ERROR;
         }
 
         if (fork_status == 0)
         {
+            result finder_result;
+            usleep(1000);
+
+            strncpy(finder_result.file_name, curent_path, MAX_PATH_LEN);
+            fclose(f_with_paths);
             close(pipeds[0]);
-            if ((finder_result.count = search_str_in_file(curent_path, str) < 0))
-            {
-                return FUNC_ERROR;
-            }
-            if (finder_result.count > 0)
-            {
-                write(pipeds[1], &finder_result, sizeof(int));
-                close(pipeds[1]);
-                exit(0);
-            }
-        }   
-        free(curent_path);
+            finder_result.count = search_str_in_file(curent_path, str);
+            
+            write(pipeds[1], &finder_result, sizeof(result));
+            close(pipeds[1]);
+            exit(0);
+        }
+            childs_count++;
     }
     close(pipeds[1]);
+    int status = 0;
+    result result1;
 
-    int result;
-
-    while (read(pipeds[0], &result, sizeof(result)))
+    while (read(pipeds[0], &result1, sizeof(result1)) == sizeof(result1))
     {
-        printf("%s", finder_result.file_name);
+        printf("\nfile path: %s,", result1.file_name);
+        printf(" [%d] substrs\n", result1.count);
     }
 
+    while (wait(&status) > 0);
+
+    close(pipeds[0]);
+    fclose(f_with_paths);
     return 0;
 }
 
@@ -120,6 +130,7 @@ int main(int argc, char *argv[])
     }
     
     status = find_str_in_files(argv[1], argv[2]);
+    printf("%d\n", status);
 
     return 0;
 }
