@@ -56,7 +56,7 @@ void castom_ls(int recmin, int recmax, char const *curent_path)
             {
                 if (S_ISREG(statbuf.st_mode)) 
                 {
-                    printf("📄 || name: %s || address: %lu %s\n", entry->d_name, entry->d_ino, type);
+                    printf("📄 || name: %s || address: %lu extension: %s\n", entry->d_name, entry->d_ino, type);
                 } 
                 else if (S_ISDIR(statbuf.st_mode)) 
                 {
@@ -89,6 +89,7 @@ void castom_ls(int recmin, int recmax, char const *curent_path)
 
 int main(int argc, char *argv[])
 {
+    int i;
     int recmin, recmax;
     char full_path[MAX_PATH_LEN];
 
@@ -104,9 +105,11 @@ int main(int argc, char *argv[])
         return INVALID_ARG;
     }
     
-    strncpy(full_path, argv[3], MAX_PATH_LEN);
+    for (i = 3; i < argc; ++i)
+    {
+        castom_ls(recmin, recmax, argv[i]);
+    }
 
-    castom_ls(recmin, recmax, full_path);
 
     return 0;
 }
