@@ -24,7 +24,6 @@ void fork_bomb(size_t height)
 {
     printf("height = %d\n", height);
     printf("fork bomb is activated!\n");
-
     int fork_status_left, fork_status_right;
     if (height == 0)
     {
@@ -34,7 +33,6 @@ void fork_bomb(size_t height)
     fork_status_left = fork();
     if (fork_status_left == 0)
     {
-        usleep(100000);
         fork_bomb(height - 1);
         exit(0);
     }
@@ -42,7 +40,6 @@ void fork_bomb(size_t height)
     fork_status_right = fork();
     if (fork_status_right == 0)
     {
-        usleep(100000);
         fork_bomb(height - 1);
         exit(0);
     }
@@ -122,7 +119,7 @@ int find_str_in_files(char const *file_with_paths, char const *str)
         if (fork_status == 0)
         {
             result finder_result;
-            usleep(10000);
+            usleep(5000);
 
             strncpy(finder_result.file_name, curent_path, MAX_PATH_LEN);
             fclose(f_with_paths);
