@@ -4,14 +4,16 @@
 !.vscode/launch.json
 !.vscode/extensions.json
 
-# --- Логи и временные файлы ---
+# --- logs and temp files ---
 *.log
 *.tmp
 *.temp
 
-# --- Папки сборки ---
+# --- build dirs ---
 build/
 dist/
 bin/
 Debug/
 Release/
+
+
