@@ -39,11 +39,17 @@ typedef struct
 
 }Validation_command;
 
+typedef struct queue_Node
+{
+    Validation_command *cmd;
+    struct queue_Node *prev;
+    struct queue_Node *next;
+} Node;
+
 typedef struct 
 {
-    Validation_command *commands[MAX_MESSAGE_COUNT];
-    int head;      
-    int tail;
+    Node *head;      
+    Node *tail;
     int count;
     int max_size;
     pthread_mutex_t mutex;
@@ -53,8 +59,8 @@ ValidationQueue validation_queue;
 
 void init_validation_queue(ValidationQueue queue)
 {
-    queue.head = 0;
-    queue.tail = 0;
+    queue.head = NULL;
+    queue.tail = NULL;
     queue.count = 0;
     queue.max_size = MAX_MESSAGE_COUNT;
     pthread_mutex_init(&queue.mutex, NULL);
@@ -66,25 +72,91 @@ int enQueue(ValidationQueue *queue, Validation_command *cmd)
     if (queue->count == queue->max_size)
     {
         pthread_mutex_unlock(&queue->mutex);
+        return 1;
+    }
+
+    Node *new_node = (Node *)malloc(sizeof(Node));
+    if (new_node == NULL)
+    {
+        perror("new_node allocation");
         return -1;
     }
-    queue->commands[queue->tail] = cmd;
-    queue->tail = (queue->tail + 1) % queue->max_size;
+    new_node->cmd = cmd;
+    new_node->next = NULL;
+    new_node->prev = NULL;
+
+    if (queue->count == 0)
+    {
+        queue->head = new_node;
+        queue->tail = new_node;
+        queue->count++;
+        pthread_mutex_unlock(&queue->mutex);
+        return 0;
+    }
+
+    Node *iter = queue->head;
+    while(iter && iter->cmd->priority >= cmd->priority)
+    {
+        iter = iter->next;
+    }
+    
+    if (iter == queue->head)
+    {
+        new_node->next = queue->head->next;
+        queue->head->prev = new_node;
+        queue->head = new_node;
+    }
+
+    else if(iter->next == NULL)
+    {
+        queue->tail->next = new_node;
+        new_node->prev = queue->tail;
+        queue->tail = new_node;
+    }
+
+    else
+    {
+        Node *prev_node = iter->prev;
+        prev_node->next = new_node;
+        new_node->prev = prev_node;
+        new_node->next = iter;
+        iter->prev = new_node;
+    }
+
     queue->count++;
+    pthread_mutex_unlock(&queue->mutex);
     return 0;
 }
 
 Validation_command *deQueue(ValidationQueue *queue)
 {
-    pthread_mutex_lock(&queue->mutex);
-    if (queue->count == 0)
-    {
+     pthread_mutex_lock(&queue->mutex);
+    
+    if (queue->count == 0) {
         pthread_mutex_unlock(&queue->mutex);
         return NULL;
     }
+    
+    // Извлекаем из головы (элемент с наивысшим приоритетом)
+    Node *temp = queue->head;
+    Validation_command *cmd = temp->cmd;
+    
+    if (queue->count == 1) 
+    {
+        queue->head = NULL;
+        queue->tail = NULL;
+    } 
 
-    Validation_command *cmd = queue->commands[queue->head];
-    queue->head = (queue->head + 1) % queue->max_size;
+    else 
+    {
+        queue->head = queue->head->next;
+        queue->head->prev = NULL;
+    }
+    
+    free(temp);
+    queue->count--;
+    
+    pthread_mutex_unlock(&queue->mutex);
     return cmd;
 }
 
@@ -153,6 +225,7 @@ void* validation_worker_thread(void* arg)
 
 int main()
 {
+    //TODO: handle create message queue in server process
     mqd_t mq;
     char const *mq_name = "/my_mq";
     char message_buffer[512];
@@ -167,6 +240,7 @@ int main()
 
     pthread_mutex_t queue_mutex;
 
+    init_validation_queue(validation_queue);
     pthread_t worker_thread;
     pthread_create(&worker_thread, NULL, validation_worker_thread, NULL);
 
@@ -182,17 +256,28 @@ int main()
         }
         message_buffer[bytes_received] = '\0';
 
-        Validation_command cmd_for_validation;
-        cmd_for_validation.data = malloc(bytes_received + 1);
-        strcpy(cmd_for_validation.data, message_buffer);
-        cmd_for_validation.priority = priority;
-        cmd_for_validation.status = STATUS_QUEUED;
+        Validation_command *cmd_for_validation = (Validation_command *)malloc(sizeof(Validation_command));
+        if(cmd_for_validation == NULL)
+        {
+            continue;
+        }
+
+        cmd_for_validation->data = malloc(bytes_received + 1);
+        if (cmd_for_validation->data == NULL)
+        {
+            free(cmd_for_validation);
+            continue;
+        }
+        strcpy(cmd_for_validation->data, message_buffer);
+        cmd_for_validation->priority = priority;
+        cmd_for_validation->status = STATUS_QUEUED;
 
         // TODO: fix that - generate GUID_v1
-        strcpy(cmd_for_validation.guid_v1, "12345678-1234-1234-1234-123456789012");
+        strcpy(cmd_for_validation->guid_v1, "12345678-1234-1234-1234-123456789012");
 
-        cmd_for_validation.errors = NULL;
-        cmd_for_validation.errors_count = 0;
+        cmd_for_validation->errors = NULL;
+        cmd_for_validation->errors_count = 0;
+        enQueue(&validation_queue, cmd_for_validation);
     }
 
 
