@@ -1,4 +1,4 @@
-#include <bits/pthreadtypes.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <sched.h>
 #include <stddef.h>
@@ -11,7 +11,14 @@
 #include <stdint.h>
 #include <pthread.h>
 
+#define MEMORY_ALLOCATION_ERROR 5
+#define OK 0
+#define MQ_OPEN_ERROR 10
+#define MQ_SEND_ERROR 11
+
 #define MAX_MESSAGE_COUNT 10
+#define MAX_ERRORS_COUNT 4
+#define MAX_GUID_SIZE 40
 
 typedef struct
 {
@@ -72,7 +79,9 @@ typedef struct guid_table
 
 guid_table table;
 
-void init_validation_queue(ValidationQueue queue);
+struct Validator;
+
+void init_validation_queue(ValidationQueue *queue);
 void free_validation_command(Validation_command *cmd);
 
 int enQueue(ValidationQueue *queue, Validation_command *cmd);
@@ -89,18 +98,27 @@ int guid_hash_table_init(guid_table *table);
 int guid_table_put(guid_table *table, Validation_command *cmd);
 Validation_command* guid_table_get(guid_table *table, const char *guid);
 
+int create_is_empty_validator(struct Validator **self);
+
+int create_required_size_validator(struct Validator **self);
+
+int create_russian_phone_validator(struct Validator **self);
+
+int create_validation_chain(struct Validator **first_validator);
+
+
 
 
 
 ValidationQueue validation_queue;
 
-void init_validation_queue(ValidationQueue queue)
+void init_validation_queue(ValidationQueue *queue)
 {
-    queue.head = NULL;
-    queue.tail = NULL;
-    queue.count = 0;
-    queue.max_size = MAX_MESSAGE_COUNT;
-    pthread_mutex_init(&queue.mutex, NULL);
+    queue->head = NULL;
+    queue->tail = NULL;
+    queue->count = 0;
+    queue->max_size = MAX_MESSAGE_COUNT;
+    pthread_mutex_init(&queue->mutex, NULL);
 }
 
 // void free_validation_command(Validation_command *cmd)
@@ -109,7 +127,6 @@ void init_validation_queue(ValidationQueue queue)
     
 //     free(cmd->data);
     
-//     // Освобождаем ошибки если есть
 //     if (cmd->errors) {
 //         for (size_t i = 0; i < cmd->errors_count; i++) {
 //             free(cmd->errors[i]);
@@ -133,7 +150,7 @@ int enQueue(ValidationQueue *queue, Validation_command *cmd)
     if (new_node == NULL)
     {
         perror("new_node allocation");
-        return -1;
+        return MEMORY_ALLOCATION_ERROR;
     }
     new_node->cmd = cmd;
     new_node->next = NULL;
@@ -145,7 +162,7 @@ int enQueue(ValidationQueue *queue, Validation_command *cmd)
         queue->tail = new_node;
         queue->count++;
         pthread_mutex_unlock(&queue->mutex);
-        return 0;
+        return OK;
     }
 
     Node *iter = queue->head;
@@ -179,14 +196,14 @@ int enQueue(ValidationQueue *queue, Validation_command *cmd)
 
     queue->count++;
     pthread_mutex_unlock(&queue->mutex);
-    return 0;
+    return OK;
 }
 
 Validation_command *deQueue(ValidationQueue *queue)
 {
      pthread_mutex_lock(&queue->mutex);
-    
-    if (queue->count == 0) {
+    if (queue->count == 0) 
+    {
         pthread_mutex_unlock(&queue->mutex);
         return NULL;
     }
@@ -216,29 +233,250 @@ Validation_command *deQueue(ValidationQueue *queue)
 
 
 
-//TODO: think over the logic of the validation chain (chain of responsibility)
+
 typedef struct Validator
 {
-    int (*validate) (struct Validator *self, void *command);
+    int (*validate) (struct Validator *self, Validation_command *cmd);
     struct Validator *next;
 
 }Validator;
 
-typedef struct Validator_Required_fields    
+typedef struct Validator_is_empty
 {
+    Validator interface_validator;
+    void *next_validator;
+}Validator_is_empty;
 
-
-}Validator_Required_fields;
-
-typedef struct Validator_of_Field_type
+typedef struct Validator_of_required_size
 {
+    Validator interface_validator;
+    void *next_validator;
+}Validator_of_required_size;
 
-}Validator_of_Field_type;
-
-typedef struct Vlidator_of_acceptable_values
+typedef struct Validator_of_russian_phone_number
 {
+    Validator interface_validator;
+    void *next_validator;
+}Validator_of_russian_phone_number;
 
-}Vlidator_of_acceptable_values;
+int create_validation_chain(Validator **first_validator)
+{
+    Validator *empty_validator = NULL;
+    Validator *size_validator = NULL;
+    Validator *phone_validator = NULL;
+
+    if (create_is_empty_validator(&empty_validator) != OK)
+    {
+        return MEMORY_ALLOCATION_ERROR;
+    }
+
+    if (create_required_size_validator(&size_validator) != OK)
+    {
+        free(empty_validator);
+        return MEMORY_ALLOCATION_ERROR;
+    }
+
+    if (create_russian_phone_validator(&phone_validator) != OK)
+    {
+        free(empty_validator);
+        free(size_validator);
+        return MEMORY_ALLOCATION_ERROR;
+    }
+
+    Validator_is_empty *empty = (Validator_is_empty *)empty_validator;
+    empty->next_validator = size_validator;
+    Validator_of_required_size *size = (Validator_of_required_size *)size_validator;
+    size->next_validator = phone_validator;
+    *first_validator = empty_validator;
+    
+
+    return OK;
+}
+
+
+int validate_for_emptyness(Validator *self, Validation_command *cmd)
+{
+    Validator_is_empty *empty_v = (Validator_is_empty *)self;
+    int status;
+    if (cmd == NULL)
+    {
+        char *error = "error 1.1:cmd";
+
+        size_t error_len = strlen(error);
+        cmd->errors[cmd->errors_count] = (char *)malloc(sizeof(char) * (error_len + 1));
+        if (cmd->errors[cmd->errors_count] == NULL)
+        {
+            perror("validation worker thread: func (validate_for_emptyness) allocation memory");
+            return MEMORY_ALLOCATION_ERROR;
+        }
+        memcpy(cmd->errors[cmd->errors_count], error, error_len + 1);
+        cmd->errors_count++;
+
+    }
+
+    else if (cmd->data_len == 0)
+    {
+        char *error = "error 1.2: data is empty";
+
+        size_t error_len = strlen(error);
+        cmd->errors[cmd->errors_count] = (char *)malloc(sizeof(char) * (error_len + 1));
+        if (cmd->errors[cmd->errors_count] == NULL)
+        {
+            perror("validation worker thread: func (validate_for_emptyness) allocation memory");
+            return MEMORY_ALLOCATION_ERROR;
+        }
+        memcpy(cmd->errors[cmd->errors_count], error, error_len + 1);
+        cmd->errors_count++;
+
+    }
+
+    if (empty_v->next_validator)
+    {
+        Validator *next_v = (Validator *)(empty_v->next_validator);
+        return next_v->validate(next_v, cmd);
+    }
+
+    return OK;
+}
+
+int validate_for_required_size(Validator *self, Validation_command *cmd)
+{
+    Validator_of_required_size *size_v = (Validator_of_required_size *)self;
+    int status;
+
+    if (cmd->data_len < 11)
+    {
+        char *error = "error 2: the number is shorter than the minimum allowed length";
+
+        size_t error_len = strlen(error);
+        cmd->errors[cmd->errors_count] = (char *)malloc(sizeof(char) * (error_len + 1));
+        if (cmd->errors[cmd->errors_count] == NULL)
+        {
+            perror("validation worker thread: func (validate_for_required_size) allocation memory");
+            return MEMORY_ALLOCATION_ERROR;
+        }
+        memcpy(cmd->errors[cmd->errors_count], error, error_len + 1);
+        cmd->errors_count++;
+    }
+
+    if (size_v->next_validator)
+    {
+        Validator *next_v = (Validator *)(size_v->next_validator);
+        return next_v->validate(next_v, cmd);
+    }
+
+    return OK;
+}
+
+int validate_russian_number(Validator *self, Validation_command *cmd)
+{
+    Validator_of_russian_phone_number *phone_v = (Validator_of_russian_phone_number *)self;
+    int status;
+
+    char *iter = cmd->data;
+    int is_correct = 1;
+    if (!(iter[0] == '+' && iter[1] == '7') && iter[0] != '8')
+    {
+        is_correct = 0;
+    }
+    if ((iter[0] == '+') && (is_correct == 1))
+    {
+        iter += 2;
+    } else
+    {
+        iter++;
+    }
+
+    if (*iter == '0')
+    {
+        is_correct = 0;
+    }
+
+    if(is_correct == 0)
+    {
+        char *error = "error 3: incorrect russian number";
+
+        size_t error_len = strlen(error);
+        cmd->errors[cmd->errors_count] = (char *)malloc(sizeof(char) * (error_len + 1));
+        if (cmd->errors[cmd->errors_count] == NULL)
+        {
+            perror("validation worker thread: func (validate_russian_number) allocation memory");
+            return MEMORY_ALLOCATION_ERROR;
+        }
+        memcpy(cmd->errors[cmd->errors_count], error, error_len + 1);
+        cmd->errors_count++;
+    }
+
+    while (*iter)
+    {
+        if (*iter == ' ')
+        {
+            iter++;
+            continue;
+        }
+
+        if (isdigit(*iter) != 0)
+        {
+            iter++;
+        }
+
+        else
+        {
+            is_correct = 0;
+            break;
+        }
+    }
+
+    return OK;
+}
+
+int create_is_empty_validator(struct Validator **self)
+{
+    Validator_is_empty *empty_validator = (Validator_is_empty *)malloc(sizeof(Validator_is_empty));
+    if (!empty_validator)
+    {
+        return MEMORY_ALLOCATION_ERROR;
+    }
+    empty_validator->next_validator = NULL;
+    empty_validator->interface_validator.validate = validate_for_emptyness;
+    empty_validator->interface_validator.next = NULL;
+
+    *self = (struct Validator *)empty_validator;
+
+    return OK;
+}
+
+int create_required_size_validator(Validator **self)
+{
+    Validator_of_required_size *required_size_validator = (Validator_of_required_size *)malloc(sizeof(Validator_of_required_size));
+    if (!required_size_validator)
+    {
+        return MEMORY_ALLOCATION_ERROR;
+    }
+    required_size_validator->next_validator = NULL;
+    required_size_validator->interface_validator.validate = validate_for_required_size;
+    required_size_validator->interface_validator.next = NULL;
+
+    *self = (struct Validator *)required_size_validator;
+
+    return OK;
+}
+
+int create_russian_phone_validator(Validator **self)
+{
+    Validator_of_russian_phone_number *russian_phone_validator = (Validator_of_russian_phone_number *)malloc(sizeof(Validator_of_russian_phone_number));
+    if (!russian_phone_validator)
+    {
+        return MEMORY_ALLOCATION_ERROR;
+    }
+    russian_phone_validator->next_validator = NULL;
+    russian_phone_validator->interface_validator.validate = validate_russian_number;
+    russian_phone_validator->interface_validator.next = NULL;
+
+    *self = (struct Validator *)russian_phone_validator;
+
+    return OK;
+}
 
 uint64_t get_guid_v1_timestamp() 
 {
@@ -258,6 +496,7 @@ uint64_t get_guid_v1_timestamp()
 
 void generate_simple_guide_v1(char *guid_buffer)
 {
+    srand(time(NULL));
     uint64_t timestamp = get_guid_v1_timestamp();
     uint64_t other_random_part = ((uint64_t)rand() / rand());
 
@@ -267,21 +506,55 @@ void generate_simple_guide_v1(char *guid_buffer)
              (unsigned long long)other_random_part );
 }
 
-void *validation_worker_thread(void* arg) 
+int send_guid_to_client(char const *client_mq_name, char const *guid)
 {
-    Validation_command *current_cmd;
-    
+    mqd_t mq;
+
+    mq = mq_open(client_mq_name, O_WRONLY);
+    if(mq == (mqd_t) - 1)
+    {
+        perror("mq open");
+        return MQ_OPEN_ERROR;
+    }
+
+    char response[MAX_GUID_SIZE];
+
+    snprintf(response, MAX_GUID_SIZE,"GUID:%s", guid);
+
+    if ((mq_send(mq, response, strlen(response) + 1, 0) == -1))
+    {
+        perror("send guid to client: mq send");
+        mq_close(mq);
+        return MQ_SEND_ERROR;
+    }
+
+    mq_close(mq);
+    return 0;
+}
+
+void *validation_worker_thread(void* arg)
+{
+    Validation_command *current_cmd = NULL;
     while (1)
     {
+    
         if ((current_cmd = deQueue(&validation_queue)) != NULL) 
         {
-            printf("Validating: %s\n", current_cmd->data);
+            printf("Validating: (%s)\n", current_cmd->data);
+            Validator *first_validator = NULL;
+            create_validation_chain(&first_validator);
+
             
-            // TODO: handle validating chain
-            
+            first_validator->validate(first_validator, current_cmd);
+
+
+            printf("[DEBUG]: validate completed!!!\n");
+            current_cmd->status = STATUS_COMPLETED;
+
+
             if (current_cmd->data) free(current_cmd->data);
         } 
-        
+        else
         {
             usleep(100000);
         }
@@ -298,7 +571,8 @@ void* status_api_thread(void* arg)
     attr.mq_curmsgs = 0;
     
     mqd_t status_mq = mq_open("/validation_status", O_CREAT | O_RDONLY, 0644, &attr);
-    if (status_mq == (mqd_t)-1) {
+    if (status_mq == (mqd_t)-1) 
+    {
         perror("status_api_thread: mq_open");
         return NULL;
     }
@@ -343,12 +617,14 @@ void* status_api_thread(void* arg)
                 case STATUS_COMPLETED:
                     if (cmd->errors_count > 0) 
                     {
-                        strcpy(response, "ERRORS:");
-                        for (size_t i = 0; i < cmd->errors_count && i < 3; i++) 
+                        strcpy(response, "ERRORS:\n{\n");
+                        for (size_t i = 0; i < cmd->errors_count; i++) 
                         {
-                            strcat(response, " ");
+                            strcat(response, "  ");
                             strcat(response, cmd->errors[i]);
+                            strcat(response, "\n");
                         }
+                        strcat(response, "}");
                     }   
                     else 
                     {
@@ -372,6 +648,7 @@ void* status_api_thread(void* arg)
     return NULL;
 }
 
+// int hash() {return 52;}
 unsigned long guid_hash(char const *guid_buffer)
 {
     unsigned long hash_code = 0;
@@ -397,14 +674,14 @@ int guid_hash_table_init(guid_table *table)
     
     table->size = 0;
     
-    // Инициализируем мьютекс
-    if (pthread_mutex_init(&table->mutex, NULL) != 0) {
+    if (pthread_mutex_init(&table->mutex, NULL) != 0) 
+    {
         free(table->buckets);
         perror("pthread_mutex_init");
         return -1;
     }
     
-    return 0;
+    return OK;
 }
 
 int guid_table_put(guid_table *table, Validation_command *cmd)
@@ -438,7 +715,7 @@ int guid_table_put(guid_table *table, Validation_command *cmd)
     table->buckets[index] = new_entry;
     table->size++;
     pthread_mutex_unlock(&table->mutex);
-    return 0;
+    return OK;
 }
 
 Validation_command* guid_table_get(guid_table *table, const char *guid)
@@ -463,37 +740,40 @@ Validation_command* guid_table_get(guid_table *table, const char *guid)
     return NULL;
 }
 
+
 int main()
 {
     mqd_t mq;
     char const *mq_name = "/my_mq";
-    char message_buffer[512];
+    char message_buffer[1024];
     unsigned int priority;
     struct mq_attr attr;
 
     attr.mq_flags = 0;
     attr.mq_maxmsg = 10;
-    attr.mq_msgsize = 512;
+    attr.mq_msgsize = 1024;
     attr.mq_curmsgs = 0;
 
     mq = mq_open("/my_mq", O_CREAT | O_RDONLY, 0644, &attr);
-        if (mq == (mqd_t) - 1)
-            {
-                perror("mq_server_open");
-                return 1;
-            }
+    if (mq == (mqd_t) - 1)
+    {
+        perror("mq_server_open");
+        return 1;
+    }
 
     pthread_mutex_t queue_mutex;
 
-    init_validation_queue(validation_queue);
+    init_validation_queue(&validation_queue);
     guid_hash_table_init(&table);
     pthread_t worker_thread;
     pthread_t status_returner_thread;
     pthread_create(&worker_thread, NULL, validation_worker_thread, NULL);
-    pthread_create(&status_returner_thread, NULL, send_status_to_client, NULL);
-
+    pthread_create(&status_returner_thread, NULL, status_api_thread, NULL);
 
     pthread_mutex_init(&queue_mutex, NULL);
+    
+    printf("Server started. Waiting for messages...\n");
+    
     while (1)
     {
         ssize_t bytes_received = mq_receive(mq, message_buffer, sizeof(message_buffer), &priority);
@@ -504,25 +784,55 @@ int main()
         }
         message_buffer[bytes_received] = '\0';
 
-        Validation_command *cmd_for_validation = (Validation_command *)malloc(sizeof(Validation_command));
-        if(cmd_for_validation == NULL)
+        char *separator = strchr(message_buffer, '|');
+        if (separator == NULL)
         {
+            printf("Invalid message format: %s\n", message_buffer);
+            continue;
+        }
+        
+        *separator = '\0';
+        char *client_queue_name = message_buffer;
+        char *phone_number = separator + 1;
+        
+        printf("Received from client queue '%s': %s (priority: %d)\n", 
+               client_queue_name, phone_number, priority);
+
+        Validation_command *cmd_for_validation = (Validation_command *)malloc(sizeof(Validation_command));
+        if (cmd_for_validation == NULL)
+        {
+            printf("Memory allocation failed for Validation_command\n");
             continue;
         }
 
-        cmd_for_validation->data = malloc(bytes_received + 1);
+        cmd_for_validation->data_len = strlen(phone_number);
+        cmd_for_validation->data = malloc(cmd_for_validation->data_len + 1);
         if (cmd_for_validation->data == NULL)
         {
             free(cmd_for_validation);
+            printf("Memory allocation failed for data\n");
             continue;
         }
-        strcpy(cmd_for_validation->data, message_buffer);
+        strcpy(cmd_for_validation->data, phone_number);
+        
         cmd_for_validation->priority = priority;
         cmd_for_validation->status = STATUS_QUEUED;
 
         generate_simple_guide_v1(cmd_for_validation->guid_v1);
+        
+        printf("Generated GUID: %s for data: %s\n", 
+               cmd_for_validation->guid_v1, cmd_for_validation->data);
+
+        send_guid_to_client(client_queue_name, cmd_for_validation->guid_v1);
 
         cmd_for_validation->errors = NULL;
+        cmd_for_validation->errors = malloc(sizeof(char *) * MAX_ERRORS_COUNT);
+        if (cmd_for_validation->errors == NULL)
+        {
+            free(cmd_for_validation->data);
+            free(cmd_for_validation);
+            return MEMORY_ALLOCATION_ERROR;
+        }
         cmd_for_validation->errors_count = 0;
 
         enQueue(&validation_queue, cmd_for_validation);
